@@ -102,9 +102,11 @@ def eni_to_instance_map(ec2):
 def main():
     ap = argparse.ArgumentParser(description="EC2 external ingress (GB) per instance by month")
     ap.add_argument("--log-group", required=True, help="VPC Flow Logs CloudWatch Logs group")
-    ap.add_argument("--instance", nargs="*", help="Filter to these instance id(s)")
+    ap.add_argument("--instance", nargs="*",
+                    help="Filter to these instance id(s); repeatable/space-separated. Default: all")
     ap.add_argument("--months", type=int, default=6, help="Months to look back (default 6)")
     ap.add_argument("--region", default=None)
+    ap.add_argument("--csv", action="store_true", help="Emit CSV (instance,month,gb) instead of a table")
     args = ap.parse_args()
 
     logs = boto3.client("logs", region_name=args.region)
@@ -133,19 +135,41 @@ def main():
         return
 
     instances = sorted(instances)
+    months = [w[0] for w in windows]
+
+    if args.csv:
+        print("instance,month,gb")
+        for iid in instances:
+            for month in months:
+                print(f"{iid},{month},{table[month].get(iid, 0.0):.3f}")
+        return
+
+    # Rows = instance, columns = month. Scales to many instances since the
+    # number of months is bounded; a TOTAL row and column summarize both axes.
     print("EC2 EXTERNAL ingress (RFC1918/local excluded) in GB, by month\n")
-    header = f"{'month':<9}" + "".join(f"{i:>22}" for i in instances) + f"{'TOTAL':>14}"
+    idw = max([len("instance")] + [len(i) for i in instances])
+    header = f"{'instance':<{idw}}" + "".join(f"{m:>14}" for m in months) + f"{'TOTAL':>14}"
     print(header)
     print("-" * len(header))
-    for label, _, _ in windows:
-        line = f"{label:<9}"
+
+    col_totals = defaultdict(float)
+    grand = 0.0
+    for iid in instances:
+        line = f"{iid:<{idw}}"
         row_total = 0.0
-        for iid in instances:
-            gb = table[label].get(iid, 0.0)
+        for month in months:
+            gb = table[month].get(iid, 0.0)
             row_total += gb
-            line += f"{gb:>22.3f}"
+            col_totals[month] += gb
+            line += f"{gb:>14.3f}"
+        grand += row_total
         line += f"{row_total:>14.3f}"
         print(line)
+
+    print("-" * len(header))
+    total_line = f"{'TOTAL':<{idw}}" + "".join(f"{col_totals[m]:>14.3f}" for m in months)
+    total_line += f"{grand:>14.3f}"
+    print(total_line)
 
 
 if __name__ == "__main__":
