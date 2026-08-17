@@ -77,13 +77,20 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
         uuid-dev \
         tk-dev \
     && rm -rf /var/lib/apt/lists/* \
+    # System Python is PEP-668 "externally managed". This is a dedicated tooling
+    # image, so drop the marker and let pip manage the interpreter directly.
+    && rm -f "/usr/lib/python${PYTHON_VERSION}/EXTERNALLY-MANAGED" \
     # Make the chosen version the default python / python3 and bootstrap pip
     && update-alternatives --install /usr/bin/python3 python3 "/usr/bin/python${PYTHON_VERSION}" 1 \
     && update-alternatives --install /usr/bin/python  python  "/usr/bin/python${PYTHON_VERSION}" 1 \
+    # ensurepip is disabled on Debian/Ubuntu, so bootstrap pip via get-pip.py
+    # (works now that the EXTERNALLY-MANAGED marker is gone).
     && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
     && "python${PYTHON_VERSION}" /tmp/get-pip.py \
     && rm -f /tmp/get-pip.py \
-    && python3 --version
+    && "python${PYTHON_VERSION}" -m pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && python3 --version \
+    && python3 -m pip --version
 
 # ── uv (fast Python package / venv manager) ───────────────────────────────────
 RUN if [[ -n "${UV_VERSION}" ]]; then UV_URL="https://astral.sh/uv/${UV_VERSION}/install.sh"; \
@@ -115,7 +122,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && VERSION="${TERRAFORM_VERSION:-$(curl -fsSL https://api.releases.hashicorp.com/v1/releases/terraform/latest | jq -r '.version')}" \
     && curl -fsSL "https://releases.hashicorp.com/terraform/${VERSION}/terraform_${VERSION}_linux_${ARCH}.zip" \
         -o /tmp/terraform.zip \
-    && unzip -q /tmp/terraform.zip -d /usr/local/bin \
+    && unzip -o -q /tmp/terraform.zip terraform -d /usr/local/bin \
     && rm -f /tmp/terraform.zip \
     && terraform version
 
@@ -124,7 +131,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && VERSION="${PACKER_VERSION:-$(curl -fsSL https://api.releases.hashicorp.com/v1/releases/packer/latest | jq -r '.version')}" \
     && curl -fsSL "https://releases.hashicorp.com/packer/${VERSION}/packer_${VERSION}_linux_${ARCH}.zip" \
         -o /tmp/packer.zip \
-    && unzip -q /tmp/packer.zip -d /usr/local/bin \
+    && unzip -o -q /tmp/packer.zip packer -d /usr/local/bin \
     && rm -f /tmp/packer.zip \
     && packer version
 
