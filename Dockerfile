@@ -74,6 +74,7 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
         libgdbm-dev \
         libxml2-dev \
         libxmlsec1-dev \
+        libkrb5-dev \
         uuid-dev \
         tk-dev \
     && rm -rf /var/lib/apt/lists/* \
@@ -143,25 +144,39 @@ RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm
     && rm -f /tmp/get-helm-3 \
     && helm version
 
-# ── Non-root user ─────────────────────────────────────────────────────────────
-ARG user=tooling
-ARG uid=65532
-ARG gid=65532
+# ── Application user ──────────────────────────────────────────────────────────
+# Non-root "app" user that owns /workspace so it can edit bind-mounted files.
+# To edit host files without permission errors, the UID/GID must match the host
+# owner. Defaults to 1000 (typical single-user Linux host); override to match:
+#   docker build --build-arg APP_UID="$(id -u)" --build-arg APP_GID="$(id -g)" ...
+ARG APP_USER=app
+ARG APP_UID=1000
+ARG APP_GID=1000
 
-RUN groupadd -g "${gid}" "${user}" \
-    && useradd -c "DevOps tooling" -d /home/"${user}" -u "${uid}" -g "${gid}" -m -s /bin/bash "${user}" \
+# Ubuntu 24.04 ships a default "ubuntu" user at UID/GID 1000, so free the
+# requested IDs first, then create the app user to own them.
+RUN if getent passwd "${APP_UID}" >/dev/null; then \
+        userdel -r "$(getent passwd "${APP_UID}" | cut -d: -f1)" 2>/dev/null || true; \
+    fi \
+    && if getent group "${APP_GID}" >/dev/null; then \
+        groupdel "$(getent group "${APP_GID}" | cut -d: -f1)" 2>/dev/null || true; \
+    fi \
+    && groupadd -g "${APP_GID}" "${APP_USER}" \
+    && useradd -c "Application user" -d /home/"${APP_USER}" -u "${APP_UID}" -g "${APP_GID}" -m -s /bin/bash "${APP_USER}" \
     && mkdir -p /workspace \
-                /home/"${user}"/.aws \
-                /home/"${user}"/.kube \
-                /home/"${user}"/.config \
-    && chown -R "${user}:${user}" /workspace /home/"${user}"
+                /home/"${APP_USER}"/.aws \
+                /home/"${APP_USER}"/.kube \
+                /home/"${APP_USER}"/.config \
+    && chown -R "${APP_USER}:${APP_USER}" /workspace /home/"${APP_USER}" \
+    && chmod -R u+rwX,g+rwX /workspace
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-USER ${user}
+USER ${APP_USER}
 WORKDIR /workspace
 
 # Mountable working directory. Bind-mount your project here, or let Docker manage
-# a named/anonymous volume:
+# a named/anonymous volume. The app user owns it, so mounted files are editable
+# when APP_UID matches the host owner:
 #   docker run -v "$PWD:/workspace" ...          # bind mount
 #   docker run -v tooling-work:/workspace ...     # named volume
 VOLUME ["/workspace"]
