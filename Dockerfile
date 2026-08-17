@@ -42,10 +42,56 @@ RUN apt-get update \
         git \
         jq \
         gnupg \
+        openssl \
         software-properties-common \
         less \
         bash-completion \
     && rm -rf /var/lib/apt/lists/*
+
+# ── Corporate CA trust (sso.oig.hhs.gov TLS-intercepting proxy) ────────────────
+# Trust the SSO / proxy CA so pip / aws / curl / git work through the
+# TLS-intercepting proxy. Certs come from two sources, in order:
+#   1. Any *.crt committed under docker/tooling/certs/  (builds anywhere).
+#   2. Live fetch of the chain presented by CA_HOST      (works on the corp net).
+# A total miss is non-fatal: the published bundle still contains the system CAs.
+ARG CA_HOST=sso.oig.hhs.gov
+ARG CA_PORT=443
+ARG CA_BUNDLE=/etc/ssl/certs/ca-bundle-trust.crt
+
+
+# Vendored certs from the build context (empty by default — drop *.crt in to
+# make the image build off-network).
+COPY docker/tooling/certs/ /usr/local/share/ca-certificates-vendor/
+
+RUN mkdir -p "$(dirname "${CA_BUNDLE}")" /usr/local/share/ca-certificates \
+    && added=0 \
+    && for c in /usr/local/share/ca-certificates-vendor/*.crt; do \
+           [[ -e "$c" ]] || continue; \
+           cp "$c" /usr/local/share/ca-certificates/; \
+           added=1; echo "CA: added vendored $(basename "$c")"; \
+       done \
+    && if echo -n \
+            | openssl s_client -connect "${CA_HOST}:${CA_PORT}" -servername "${CA_HOST}" -showcerts 2>/dev/null \
+            | awk '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/' > /tmp/sso-chain.pem \
+          && test -s /tmp/sso-chain.pem; then \
+           cp /tmp/sso-chain.pem /usr/local/share/ca-certificates/sso-oig-hhs-gov.crt; \
+           added=1; echo "CA: fetched chain from ${CA_HOST}:${CA_PORT}"; \
+       else \
+           echo "CA: WARNING - ${CA_HOST}:${CA_PORT} unreachable; using vendored/system certs only"; \
+       fi \
+    && rm -f /tmp/sso-chain.pem \
+    && update-ca-certificates \
+    # Publish the refreshed system bundle (now including any added CAs).
+    && cp /etc/ssl/certs/ca-certificates.crt "${CA_BUNDLE}" \
+    && { [[ "$added" -eq 1 ]] || echo "CA: WARNING - no corporate cert added; ${CA_BUNDLE} has system CAs only"; }
+
+# Point the common toolchains at the trust bundle (kept in sync with CA_BUNDLE).
+ENV SSL_CERT_FILE=${CA_BUNDLE} \
+    REQUESTS_CA_BUNDLE=${CA_BUNDLE} \
+    CURL_CA_BUNDLE=${CA_BUNDLE} \
+    AWS_CA_BUNDLE=${CA_BUNDLE} \
+    GIT_SSL_CAINFO=${CA_BUNDLE} \
+    NODE_EXTRA_CA_CERTS=${CA_BUNDLE}
 
 # ── Python + build/dev dependencies ───────────────────────────────────────────
 # deadsnakes provides the interpreter + version-specific extras (Ubuntu 24.04
