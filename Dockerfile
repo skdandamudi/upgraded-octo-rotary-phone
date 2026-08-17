@@ -151,10 +151,19 @@ ARG gid=65532
 RUN groupadd -g "${gid}" "${user}" \
     && useradd -c "DevOps tooling" -d /home/"${user}" -u "${uid}" -g "${gid}" -m -s /bin/bash "${user}" \
     && mkdir -p /workspace \
-    && chown -R "${user}:${user}" /workspace
+                /home/"${user}"/.aws \
+                /home/"${user}"/.kube \
+                /home/"${user}"/.config \
+    && chown -R "${user}:${user}" /workspace /home/"${user}"
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
 USER ${user}
 WORKDIR /workspace
+
+# Mountable working directory. Bind-mount your project here, or let Docker manage
+# a named/anonymous volume:
+#   docker run -v "$PWD:/workspace" ...          # bind mount
+#   docker run -v tooling-work:/workspace ...     # named volume
+VOLUME ["/workspace"]
 
 ENTRYPOINT ["/bin/bash"]
